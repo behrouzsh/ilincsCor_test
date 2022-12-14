@@ -1,0 +1,17 @@
+# PKG_LIBS= -lz
+# CXX_STD=CXX17
+# PKG_CFLAGS= -pthread -ftree-vectorize -O3 -ffast-math -Xpreprocessor
+# PKG_CPPFLAGS = -pthread
+
+# CXX14FLAGS="-pthread -ftree-vectorize -O3 -ffast-math -Xpreprocessor"
+# CFLAGS +=              -O3 -Wall -pipe -pedantic -std=gnu99
+# CXXFLAGS +=            -O3 -Wall -pipe -Wno-unused -pedantic
+
+# PKG_CXXFLAGS = -O3 -Wall -pthread -ftree-vectorize -ffast-math 
+# -Xpreprocessor
+# CFLAGS +=              -O3 -Wall -pthread -ftree-vectorize -ffast-math -Xpreprocessor
+# CXXFLAGS +=            -O3 -Wall -pthread -ftree-vectorize -ffast-math -Xpreprocessor
+
+
+# this is working
+PKG_LIBS = -pthread -ftree-vectorize -O3 -ffast-math -Xpreprocessor

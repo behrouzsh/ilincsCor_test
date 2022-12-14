@@ -1,0 +1,4 @@
+signatures=48001
+genes=100
+src_data=generated_test.RData
+src_weight=generated_test.RData

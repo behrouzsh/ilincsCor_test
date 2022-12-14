@@ -1,0 +1,494 @@
+---
+title: "iLINCS API R Notebook"
+output:
+html_document:
+df_print: paged
+pdf_document: default
+---
+<style type="text/css">
+  .main-container {
+    max-width: 1200px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+</style>
+### Install iLincsCor 
+```{r include = FALSE}
+#install.packages("devtools")
+remove.packages("iLincsCor")
+devtools::install_github(repo = "behrouzsh/iLincsCor@d35ea9bf7996cd1b0aaefe0be18e231a8d29c45d",force = TRUE)
+devtools::install_github(repo = "hadley/babynames")
+
+#install.packages('https://cran.r-project.org/src/contrib/Archive/hrbrthemes/hrbrthemes_0.1.0.tar.gz', type='source', repos=NULL)
+
+#install.packages("markdown")
+```
+
+### Load Prerequisites  
+```{r include = FALSE}
+library(knitr)
+library(tinytex)
+library(httr)
+library(jsonlite)
+library(htmltools)
+library(wCorr)
+library(iLincsCor)
+options(width = "200")
+library(hash)
+library(dplyr)
+library(weights)
+library(rlist)
+require(data.table)
+library(markdown)
+options(max.print=10000)
+```
+
+### Define a function to download and retreive ilincs signatures
+```{r define function}
+get_ilincs_signature <- function(ilincs_signatureId) {
+    req <- POST("http://www.ilincs.org/api/ilincsR/downloadSignature", body = list(sigID = paste(ilincs_signatureId), display = FALSE), encode = "json")
+    ilincs_sessionId<-unlist(httr::content(req))
+    #print(ilincs_sessionId)
+    fileUrl=paste("http://www.ilincs.org/tmp/",ilincs_sessionId,".xls",sep="")
+    signatureData<-read.table(fileUrl,sep="\t",header=T,stringsAsFactors = F)
+    #print(signatureData)
+  return(signatureData)
+}
+```
+
+### Display Signature Libraries
+```{r list signature libraries}
+apiUrl <- "http://www.ilincs.org/api/SignatureLibraries"
+req <- GET(apiUrl)
+json <- httr::content(req, as = "text")
+ilincs_libraries <- fromJSON(json)
+ilincs_libraries[,c("libraryID","libraryName")]
+
+
+```
+
+
+#### Select 3 random signature from libraries LIB_5 and check their connectivity against 5 reported connected signature
+```{r define parameters}
+number_of_random_sample_signatures <- 3
+number_of_random_connected_signatures <- 5
+generate_bing_signature <- FALSE
+if(generate_bing_signature){
+lincscpDiffExp <- as.matrix(get(load("tests/test_data/lincscpDiffExp_bing.RData")))
+lincscpPValExp <- as.matrix(get(load("tests/test_data/lincscpPValues_bing.RData")))
+
+bing_signature <- as.data.frame(cbind(lincscpDiffExp[,1],lincscpPValExp[,1]))
+colnames(bing_signature) <- c("Value_LogDiffExp", "Significance_pvalue")
+bing_signature['signatureID'] = colnames(lincscpPValExp)[1]
+bing_signature['ID_geneid'] = rownames(bing_signature)
+bing_signature <- bing_signature[order(as.integer(rownames(bing_signature)),decreasing=FALSE),]
+write.table(bing_signature, file='tests/bing_signature.tsv', quote=FALSE, sep='\t', col.names = NA)
+}
+
+```
+
+#### Searching for signatures
+```{r search signatures}
+primes_list <- list("LIB_5")
+sig_with_p_value <- c()
+sig_without_p_value <- c()
+
+calculated_similarity_with_p_value <- hash()
+calculated_similarity_without_p_value <- hash()
+
+ilincs_similarity_with_p_value <- hash()
+ilincs_similarity_without_p_value <- hash()
+
+for (p in primes_list) {
+  print(p)
+ 
+  ilincs_libId<-p
+  apiUrl <- paste("http://www.ilincs.org/api/SignatureMeta/findTermWithSynonyms?library=",ilincs_libId,sep="")
+  req <- GET(apiUrl)
+
+  ilincs_result_df<-fromJSON(httr::content(req,type="text"))$data
+
+
+  print(dim(ilincs_result_df[floor(runif(1000, min=0, max=dim(ilincs_result_df)[1])),c("cellline","compound","concentration","signatureid","is_exemplar")]))
+  counter = 0
+  seed = 50
+  
+  for (sigloop in ilincs_result_df[floor(runif(number_of_random_sample_signatures, min=0, max=dim(ilincs_result_df)[1])),c("signatureid")]){
+    ilincs_signatureId = sigloop
+    print(ilincs_signatureId)
+    counter <- counter + 1
+    
+    print("download signature ======================================")
+    req <- POST("http://www.ilincs.org/api/ilincsR/downloadSignature", body = list(sigID = paste(ilincs_signatureId), display = FALSE), encode = "json")
+    ilincs_sessionId<-unlist(httr::content(req))
+    
+    fileUrl=paste("http://www.ilincs.org/tmp/",ilincs_sessionId,".xls",sep="")
+    signatureData <-read.table(fileUrl,sep="\t",header=T,stringsAsFactors = F)
+  
+  if(FALSE){
+    apiUrl <- paste("http://www.ilincs.org/api/SignatureMeta/findConcordantSignatures?sigID=",ilincs_signatureId,"&lib=",ilincs_libId,sep="")
+    req <- GET(apiUrl)
+    
+    ilincs_conn_df<-fromJSON(httr::content(req,type="text"))
+    result_of_connected_sigs_from_sigID <- ilincs_conn_df[,c("signatureid","similarity","pValue")]
+    result_of_connected_sigs_from_sigID<-result_of_connected_sigs_from_sigID[order(result_of_connected_sigs_from_sigID$similarity, decreasing = TRUE),]
+    print(head(result_of_connected_sigs_from_sigID))
+  }
+  
+    print("========================================================================")
+    print("get connected signatures based on the downloaded signature with p value") 
+    print("========================================================================")
+    #print(ilincs_sessionId[1])
+    #print(toString(ilincs_sessionId[1]))
+    
+    file_name <- paste(ilincs_libId,"_", toString(ilincs_sessionId[1]), ".tsv", sep="")
+    sig_with_p_value <- append(sig_with_p_value,file_name)
+    calculated_similarity_with_p_value_list <- list()
+    ilincs_similarity_with_p_value_list <- list()
+
+
+
+
+
+    write.table(signatureData,file=file_name,sep="\t",row.names=F,col.names = T,quote=F)
+    #system(paste("head sigFile.tsv"))
+    
+    
+    apiUrl<-"http://www.ilincs.org/api/SignatureMeta/upload"
+    sigFile <- file_name
+    in_data<-as.data.frame(fread(file_name))
+    in_data_orig<-as.data.frame(fread(file_name))
+    #print(in_data)
+   
+    req <- POST(apiUrl, body=list(file=upload_file(sigFile)))
+    #req <- POST(apiUrl, body=list(file=signatureData))
+    signatureFile <- httr::content(req)$status$fileName[[1]]
+    print(head(signatureFile))
+
+    apiUrl <- "http://www.ilincs.org/api/ilincsR/findConcordances"
+    req <- (POST(apiUrl, body = list(file=signatureFile, lib=ilincs_libId), encode = "form"))
+    output <- data.table::rbindlist(httr::content(req)$concordanceTable, use.names = TRUE, fill = TRUE)
+    result_of_upload_complete_sig <- output[,c("signatureid","similarity","pValue")]
+    result_of_upload_complete_sig<-result_of_upload_complete_sig[order(result_of_upload_complete_sig$similarity, decreasing = TRUE),]
+    print(head(result_of_upload_complete_sig))
+    
+
+    print("===========================================================================================================")
+    print("checking the accuracy of results via offline benchmarking on the downloaded complete signature with p-value")  
+    print("===========================================================================================================")
+      for(varIter in 1:number_of_random_connected_signatures)
+         {
+      
+          compared_sig = result_of_upload_complete_sig[varIter,"signatureid"]
+        
+          restart_data <- in_data
+          com_sig <-get_ilincs_signature(toString(compared_sig))
+          rownames(com_sig) <- com_sig$ID_geneid
+          vardiff <- as.data.frame(com_sig[,c("Value_LogDiffExp")])
+          rownames(vardiff) <- com_sig$ID_geneid
+          varpval <- as.data.frame(com_sig[,c("Significance_pvalue")])
+          rownames(varpval) <- com_sig$ID_geneid
+                   
+          colnames(vardiff)<- c("compared_sig_dif")
+          colnames(varpval)<- c("compared_sig_pval")
+
+          restart_data<-merge(restart_data, vardiff, by.x="ID_geneid", by.y="row.names")
+          restart_data<-merge(restart_data, varpval, by.x="ID_geneid", by.y="row.names")
+          weight_vec <- c()
+          restart_data$"new_weight"<-(-1.0)*(log10(restart_data$"Significance_pvalue")+log10(restart_data$"compared_sig_pval"))
+           w_co <- weightedCorr(y=restart_data$"compared_sig_dif", x=restart_data$"Value_LogDiffExp", method="pearson", weights=restart_data$"new_weight")
+           
+          print(paste0("For signature: ", compared_sig, " calculated weighted correlation is:",w_co, " ilincs query results is: ", result_of_upload_complete_sig[varIter,"similarity"]))
+          
+          calculated_similarity_with_p_value_list <- append(calculated_similarity_with_p_value_list, w_co)  
+          ilincs_similarity_with_p_value_list <- append(ilincs_similarity_with_p_value_list, result_of_upload_complete_sig[varIter,"similarity"])  
+
+      }
+    calculated_similarity_with_p_value[[file_name]] <- calculated_similarity_with_p_value_list
+    ilincs_similarity_with_p_value[[file_name]] <- ilincs_similarity_with_p_value_list
+    
+    print("==========================================================================")
+    print("get connected signatures based on the downloaded signature without p value") 
+    print("==========================================================================")
+    
+    
+    file_name <- paste(ilincs_libId,"_without_pvalue_", toString(ilincs_sessionId[1]), ".tsv", sep="")
+    sig_without_p_value <- append(sig_without_p_value, file_name)
+      
+    calculated_similarity_without_p_value_list  <- list()
+    ilincs_similarity_without_p_value_list  <- list()
+    
+    signatureData_without_pvalue = subset(signatureData, select = -c(Significance_pvalue) )
+    write.table(signatureData_without_pvalue,file=file_name,sep="\t",row.names=F,col.names = T,quote=F)
+    
+    apiUrl<-"http://www.ilincs.org/api/SignatureMeta/upload"
+    sigFile <- file_name
+    in_data<-as.data.frame(fread(file_name))
+    
+   
+    req <- POST(apiUrl, body=list(file=upload_file(sigFile)))
+    
+    signatureFile <- httr::content(req)$status$fileName[[1]]
+    print(head(signatureFile))
+
+    apiUrl <- "http://www.ilincs.org/api/ilincsR/findConcordances"
+    req <- (POST(apiUrl, body = list(file=signatureFile, lib=ilincs_libId), encode = "form"))
+    output <- data.table::rbindlist(httr::content(req)$concordanceTable, use.names = TRUE, fill = TRUE)
+    result_of_upload_complete_sig <- output[,c("signatureid","similarity","pValue")]
+  
+
+    result_of_upload_complete_sig<-result_of_upload_complete_sig[order(result_of_upload_complete_sig$similarity, decreasing = TRUE),]
+    print(head(result_of_upload_complete_sig))
+    
+    
+    print("==============================================================================================================")
+    print("checking the accuracy of results via offline benchmarking on the downloaded complete signature without p-value")  
+    print("==============================================================================================================")
+      for(varIter in 1:number_of_random_connected_signatures)
+         {
+          
+          compared_sig = result_of_upload_complete_sig[varIter,"signatureid"]
+          
+          restart_data <- in_data
+          
+          
+          com_sig <-get_ilincs_signature(toString(compared_sig))
+          rownames(com_sig) <- com_sig$ID_geneid
+          vardiff <- as.data.frame(com_sig[,c("Value_LogDiffExp")])
+          rownames(vardiff) <- com_sig$ID_geneid
+          varpval <- as.data.frame(com_sig[,c("Significance_pvalue")])
+          rownames(varpval) <- com_sig$ID_geneid
+         
+          colnames(vardiff)<- c("compared_sig_dif")
+          colnames(varpval)<- c("compared_sig_pval")
+
+          restart_data<-merge(restart_data, vardiff, by.x="ID_geneid", by.y="row.names")
+          restart_data<-merge(restart_data, varpval, by.x="ID_geneid", by.y="row.names")
+          weight_vec <- c()
+          restart_data$"new_weight"<-(-1.0)*(log10(restart_data$"compared_sig_pval"))
+          w_co <- weightedCorr(y=restart_data$"compared_sig_dif", x=restart_data$"Value_LogDiffExp", method="pearson", weights=restart_data$"new_weight")
+           
+          print(paste0("For signature: ", compared_sig, " calculated weighted correlation is:",w_co, " ilincs query results is: ", result_of_upload_complete_sig[varIter,"similarity"]))
+
+            calculated_similarity_without_p_value_list <- append(calculated_similarity_without_p_value_list, w_co)  
+          ilincs_similarity_without_p_value_list <- append(ilincs_similarity_without_p_value_list, result_of_upload_complete_sig[varIter,"similarity"])  
+
+      }
+    calculated_similarity_without_p_value[[file_name]] <- calculated_similarity_without_p_value_list
+    ilincs_similarity_without_p_value[[file_name]] <- ilincs_similarity_without_p_value_list
+    }
+}
+for (v in ls(ilincs_similarity_with_p_value)) {
+  print(v)
+    print(paste(as.list(calculated_similarity_with_p_value[[v]])))
+  print(paste(as.list(ilincs_similarity_with_p_value[[v]])))
+  print("------------")
+}
+
+print("=============================")
+for (v in ls(ilincs_similarity_without_p_value)) {
+  print(v)
+  print(paste(as.list(calculated_similarity_without_p_value[[v]])))
+  print(paste(as.list(ilincs_similarity_without_p_value[[v]])))
+  print("------------")
+}
+
+```
+
+### Running parallel query for comparing the accuracy of parallel query with serial calculation
+```{r Running parallel query for LIB_5  with ~1000 genes}
+
+source("tests/create_binary_files_from_lib.R")
+
+create_LIB_fom_file(lib_name="LIB_5",diffExp_data="tests/test_data/lincscpDiffExp.RData"
+                                , pPValue_data="tests/test_data/lincscpPValues.RData", seed_sig_csv = sig_with_p_value[1])
+
+
+# lib <- new(iLincsCor,"data/LIB_test/")
+lib <- new(iLincsCor,"data/LIB_5/")
+print("Comapring the results of parallel and serial calculations for signatures with p-Value")
+for(item_vec in sig_with_p_value){
+  num_process <- 1
+  vec <- lib$read_input(item_vec)
+  print("=============================")
+  print(item_vec)
+  print("=============================")
+  for(i in seq(1,10)){
+  print(paste("number of processors",num_process))
+    
+    x<-bench::mark(cor_vec <-lib$cor(vec,num_process))
+    print("Ordered correlated signatures:")
+    print(lib$signature_names[order(cor_vec,decreasing=TRUE)][0:number_of_random_connected_signatures])
+    print("Parallel query results:")
+    print(cor_vec[order(cor_vec,decreasing=TRUE)][0:number_of_random_connected_signatures])
+    print("Serial Weighted Correlation results:")
+    print(paste(as.list(calculated_similarity_with_p_value[[item_vec]])))
+    print("Serial iLINCS API results:")
+    print(paste(as.list(ilincs_similarity_with_p_value[[item_vec]])))
+    print("----------------")
+    num_process <- num_process*2
+    print(x)
+  }
+  
+}
+
+print("Comapring the results of parallel and serial calculations for signatures without p-Value")
+for(item_vec in sig_without_p_value){
+  num_process <- 1
+  vec <- lib$read_input(item_vec)
+  print("=============================")
+  print(item_vec)
+  print("=============================")
+  iterr = 1
+  for(i in seq(1,50)){
+  print(paste("number of processors",num_process))
+    
+    x<-bench::mark(cor_vec <-lib$cor(vec,num_process))
+    print("Ordered correlated signatures:")
+    print(lib$signature_names[order(cor_vec,decreasing=TRUE)][0:number_of_random_connected_signatures])
+    print("Parallel query results:")
+    print(cor_vec[order(cor_vec,decreasing=TRUE)][0:number_of_random_connected_signatures])
+    print("Serial Weighted Correlation results:")
+    print(paste(as.list(calculated_similarity_without_p_value[[item_vec]])))
+    print("Serial iLINCS API results:")
+    print(paste(as.list(ilincs_similarity_without_p_value[[item_vec]])))
+    print("----------------")
+    num_process <- num_process+2
+    if(FALSE){
+    if(iterr == 1){
+      num_process <- num_process + 1
+      iterr = 0
+    }
+    else{
+      iterr = 1
+    }
+    }
+    
+    
+    #num_process <- num_process + 1
+    print(x)
+  }
+  
+}
+
+```
+
+
+
+### Plotting curve line
+```{r Plotting curve line}
+library(ggplot2)
+library(babynames) # provide the dataset: a dataframe called babynames
+library(dplyr)
+library(hrbrthemes)
+library(viridis)
+
+# Keep only 3 names
+don <- babynames %>% 
+  filter(name %in% c("Ashley", "Patricia", "Helen")) %>%
+  filter(sex=="F")
+don
+
+# Plot
+don %>%
+  ggplot( aes(x=year, y=n, group=name, color=name)) +
+    geom_line() +
+    scale_color_viridis(discrete = TRUE) +
+    ggtitle("Popularity of American names in the previous 30 years") +
+    theme_ipsum() +
+    ylab("Number of babies born")
+
+# Plot
+time_series %>%
+  ggplot( aes(x=cpu, y=time, group=name, color=name)) +
+    geom_line() +
+    scale_color_viridis(discrete = TRUE) +
+    ggtitle("Time speed-up Curve") +
+    theme_ipsum() +
+    ylab("Number of CPUs")+
+    ylab("Computational Time")
+```
+
+### Running parallel query for a user generated test library
+```{r Running parallel query for test}
+
+source("tests/create_test_lib.R")
+
+create_LIB(lib_name="LIB_test", total_sigs=48000, seed_sig_csv="tests/LINCSCP_1000_short.tsv")
+lib <- new(iLincsCor,"data/LIB_test/")
+
+vec <- lib$read_input("tests/LINCSCP_1000.tsv")
+zz <- file("console.txt", open="wt")
+sink(zz,  split=TRUE)
+num_process <- 1
+cpu <- c()
+time <- c()
+benchmark <- FALSE
+for(i in seq(1,10)){
+  #num_process <- i
+  print("========================================")
+  print(paste("number of processors", num_process))
+  print("========================================")
+  if(benchmark){
+    x<-bench::mark(cor_vec <-lib$cor(vec,num_process))
+    time <- append(time,log2(x$min))
+    print(x)
+  }
+
+cor_vec <-lib$cor(vec,num_process)
+cpu <- append(cpu,log2(num_process))
+
+num_process <- i*2
+
+
+
+
+}
+sink()
+
+#cpu
+#time
+#time_series <- data.frame()
+#time_series$cpu <- cpu
+#time_series$time <- time
+time
+if(benchmark){
+  time_series = data.frame(cpu = cpu, time = time)
+  time_series %>%
+  ggplot( aes(x=cpu, y=time)) +
+    geom_line() +
+    #scale_color_viridis(discrete = TRUE) +
+    ggtitle("Time speed-up Curve") +
+    #theme_ipsum() +
+    ylab("Number of CPUs")+
+    ylab("Computational Time")
+}
+
+```
+
+
+
+
+### Running parallel query for speed up of a bigger library
+```{r Running parallel query for LIB_5_bing with ~10,000 genes}
+
+
+source("tests/create_binary_files_from_lib.R")
+
+create_LIB_fom_file(lib_name="LIB_5_bing",diffExp_data="tests/test_data/lincscpDiffExp_bing.RData"
+                                , pPValue_data="tests/test_data/lincscpPValues_bing.RData", seed_sig_csv = "tests/bing_signature.tsv")
+
+
+# lib <- new(iLincsCor,"data/LIB_test/")
+lib <- new(iLincsCor,"data/LIB_5_bing/")
+vec <- lib$read_input("tests/bing_signature.tsv")
+
+num_process <- 1
+for(i in seq(1,100)){
+  print(paste("number of processors:",num_process))
+  x<-bench::mark(cor_vec <-lib$cor(vec,num_process))
+  num_process <- num_process+2
+  print(x)
+}
+```
+
