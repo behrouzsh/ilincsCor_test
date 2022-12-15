@@ -93,7 +93,7 @@ t_output cor(t_input input, t_input input_weights, t_input_included input_includ
    delta_time = (double) (end_time.tv_sec - start_time.tv_sec);
    delta_time += (double) (end_time.tv_usec - start_time.tv_usec) / 1.0e+6;
 
-   cerr << "cor finished (" << delta_time << ") seconds with n_cols: " << each_n_cols << " and start col: "<< each_start_col << endl;
+   cerr << "cor finished (" << delta_time << ") seconds with n_cols: " << each_n_cols << " and start col: "<< each_start_col << " and the time per column is " << 1.0* delta_time/each_n_cols << endl;
    // cerr << "output: " << each_result[0] << ", " << each_result[1] << endl;
    return(each_result);
 }
